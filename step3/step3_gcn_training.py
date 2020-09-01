@@ -1,8 +1,9 @@
-from step3 import step3_gcn_nn_concatenate as gcn_nn
-from step3 import step3_gcn_loss as gcn_loss
+import step3_gcn_nn_concatenate as gcn_nn
+import step3_gcn_loss as gcn_loss
 import torch as th
 import os    
 from pathlib import Path
+import copy
 # print(gcn_nn.get_options())
 # print(gcn_loss.get_options())
 # print(gcn_nn.get_instance(0,None))
@@ -21,9 +22,11 @@ class Training():
         self.optimizer = optimizer
         self.epochs_run = 0
         self.path = None
+        self.gen_path = None
         self.runtime_seconds = 0
         self.log = []
         self.gen_path = ""
+        self.best = None
         
     def set_training(self, net_name,batch_splits,lr,loss_name,loss_parameters,optimizer_name="adam"):
         self.net_name = net_name
@@ -41,25 +44,31 @@ class Training():
             self.optimizer = th.optim.Adam(self.net.parameters(),self.lr,weight_decay=0.001)
         if self.optimizer_name == "sgd":
             self.optimizer = th.optim.SGD(self.net.parameters(), lr=self.lr, momentum=0.9, weight_decay=0.001)
+            
+    def set_best(self,best):
+        best_copy = copy.deepcopy(best)
+        best_copy.best = None
+        self.best = best_copy
     
     def set_lr(self,lr):
         self.lr = lr
         if self.optimizer != None:
             self.optimizer.param_groups[0]['lr']=self.lr
         
+        
     
-    def save_state(self,path_setup=""):
+    def save_state(self,path_setup="",cv_path=""):
         state = {}
         if self.net != None:
             state['net'] = self.net.state_dict()
             state['net_name'] = self.net_name
-            state['batch_splits'] = self.batch_splits
-            state['lr'] = self.lr
+            state['batch_splits'] = self.log[-1]['batch_splits']
+            state['lr'] = self.log[-1]['lr']
             state['loss_name'] = self.loss_name
             state['loss_parameters'] = self.loss_parameters
             state['optimizer_name'] = self.optimizer_name
             state['optimizer'] = self.optimizer.state_dict()
-            state['epochs_run'] = self.epochs_run
+            state['epochs_run'] = self.log[-1]['epoch']+1
             state['log'] = self.log
             state['runtime_seconds'] = self.runtime_seconds
             from_epoch = "00"
@@ -76,32 +85,43 @@ class Training():
                 save_dir = save_dir+"/"+parent_path.split(".pt")[0]+"/"
             
             
-            save_path = str("loss_parameters:{} | batch_splits:{} | lr:{:.0e} |  epochs_run:{}".
+            #standard e notation for lr
+            enot = str("{:e}".format(self.lr))
+            enot = enot.split("e")[0].rstrip('0').rstrip(".")+"e"+enot.split("e")[1]
+            
+            save_path = str("loss_parameters:{} | batch_splits:{} | lr:{} |  epochs_run:{}".
                             format(self.loss_parameters,
                                    self.batch_splits,
-                                   self.lr,
+                                   enot,
                                    from_epoch+"_"+str("{:02d}".format(self.epochs_run))
                                   )).replace(" ","")
             
             outdir = path_setup+"/"+save_dir
+            ###
             outpath = outdir +"/"+save_path
             self.gen_path = outpath
             
-            outdir_model = "./models/"+ outdir
+            outdir_model = "./models/"+ outdir +"/"+save_path
             if not os.path.exists(outdir_model):
                 Path(outdir_model).mkdir(parents=True, exist_ok=True)
-                
-            outdir_result = "./results/"+ outdir
+
+            outdir_result = "./results/"+ outdir +"/"+save_path
             if not os.path.exists(outdir_result):
                 Path(outdir_result).mkdir(parents=True, exist_ok=True)
+
+            path_model = outdir_model+cv_path+".pt"
+            path_result = outdir_result+cv_path+".txt"
                 
-            path_model = outdir_model+"/"+save_path+".pt"
-            path_result = outdir_result+"/"+save_path+".txt"
+            
             th.save(state, path_model)
             file_out = open(path_result,'w') 
             file_out.writelines(str(self.log))
             file_out.close()
             print("Model and results saved")
+            
+            if self.best != None:
+                print("Saving best model...")
+                self.best.save_state(path_setup+"/best",cv_path)
         else:
             print("Nothing to save")
         
@@ -138,6 +158,6 @@ class Training():
         #load states of NN and optimizer
         self.net.load_state_dict(state['net'])
         self.optimizer.load_state_dict(state['optimizer'])
-        print("Training state loaded for configuration: \n" + path.split("/")[-1])
+        print("Training state loaded")
         print("Previous log: \n")
         print(self.log)    

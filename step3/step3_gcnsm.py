@@ -1,14 +1,11 @@
-#!/usr/bin/env python
-# coding: utf-8
-
-# # Get dataset with ~80% train, ~20% test
-
-# In[1]:
-
-
+## Get dataset with ~80% train, ~20% test
 import numpy as np
 import pandas as pd
-from step3 import step3_train_test_split as ds_split
+import step3_train_test_split as ds_split
+import copy
+import os
+from pathlib import Path
+import time
 
 # default values
 train_mask = None
@@ -16,20 +13,19 @@ test_mask = None
 neg_sample = 2
 strategy = "random"
 create_new_split = False
-word_embedding_encoding = "FASTTEXT"
 path_setup = None
 dataset_name = "openml_203ds_datasets_matching"
 cross_v=-1
+g = None
 
 def parameter_error(param_error,value):
-    print("Encounter error in parameter {}, default value: {} will be used ".format(param_error,value))
-    
-def load_env(ds_name=None,ns=None,st=None,sp=None,we=None,cv=-1): 
+    raise NameError("Encounter error in parameter {}".format(param_error))
+
+def load_env(ds_name=None,ns=None,experiment=None,new_split=None,cv=0): 
     global dataset_name
     global neg_sample
     global strategy
     global create_new_split
-    global word_embedding_encoding
     global train_mask
     global test_mask
     global path_setup
@@ -42,123 +38,101 @@ def load_env(ds_name=None,ns=None,st=None,sp=None,we=None,cv=-1):
         parameter_error("dataset_name",dataset_name)
     else:
         dataset_name = ds_name
-        
-    if ns == None or not int(ns) or ns < 0: 
-        parameter_error("neg_sample",neg_sample)
+    
+    if ns == None or ns < 0: 
+        parameter_error("neg_sample: "+str(ns),neg_sample)
     else:
         neg_sample = ns
         
-    if st == None or not str(st) or st not in ["isolation","random"]:
+    if experiment == None or not str(experiment) or experiment not in ["10_cv","random_subsam","hold_out"]:
         parameter_error("strategy",strategy)
     else:
-        strategy = st
-    if sp == None:
+        strategy = experiment
+    if new_split == None:
         parameter_error("create_new_split",create_new_split)
     else:
-        create_new_split = sp
-    if we == None or not str(we) or we not in ["BERT","FASTTEXT"]:
-        parameter_error("word_embedding_encoding",word_embedding_encoding)
-    else:
-        word_embedding_encoding = we
+        create_new_split = new_split
 
     print("Values to load")
     print("dataset_name="+dataset_name)
     print("neg_sample= "+str(neg_sample))
     print("strategy= "+strategy)
     print("create_new_split= "+str(create_new_split))
-    print("word_embedding_encoding= "+word_embedding_encoding)    
     print("cross_v= "+str(cross_v))    
 
-    if cross_v < 0:
-        if create_new_split:
-            print("Creating simple train/test splits...")
-            path_setup = ds_split.split_ds(dataset_name,strategy,neg_sample)
-        else:
-            path_setup = dataset_name+"/"+strategy+"/"+str(neg_sample)
-        
-        train_mask = pd.read_csv("./datasets/"+path_setup+"/train.csv").to_numpy()
-        test_mask = pd.read_csv("./datasets/"+path_setup+"/test.csv").to_numpy()
+    if strategy == "hold_out":
+        path_setup = dataset_name+"/"+strategy
+        train_mask = pd.read_csv("./ground_truth/"+path_setup+"/train.csv").to_numpy()
+        test_mask = pd.read_csv("./ground_truth/"+path_setup+"/test.csv").to_numpy()
     
     else:
-        if cross_v == 0:
+        if cross_v == 0 and create_new_split:
             print("Creating cross validation splits...")
-            path_setup = ds_split.split_ds(dataset_name,strategy,neg_sample,True)
+            path_setup = ds_split.split_ds(dataset_name,strategy)
         else:
-            path_setup = dataset_name+"/"+strategy+"/"+str(neg_sample)+"/cv"
+            path_setup = dataset_name+"/"+strategy
             
-        
-        train_mask = pd.read_csv("./datasets/"+path_setup+"/"+str(cross_v)+"/train.csv").to_numpy()
-        test_mask = pd.read_csv("./datasets/"+path_setup+"/"+str(cross_v)+"/test.csv").to_numpy()
+        train_mask = pd.read_csv("./ground_truth/"+path_setup+"/"+str(cross_v)+"/train.csv").to_numpy()
+        test_mask = pd.read_csv("./ground_truth/"+path_setup+"/"+str(cross_v)+"/test.csv").to_numpy()
     
-    
-
     #info about split
     train_positive = np.array([x for x in train_mask if x[2]==1])
     test_positive = np.array([x for x in test_mask if x[2]==1])
     print("Dataset splits loaded")
-    print("Train samples: "+str(len(train_mask)) + " Test samples: "+str(len(test_mask)))
+#     print("Train samples: "+str(len(train_mask)) + " Test samples: "+str(len(test_mask)))
     print("Train positive samples: "+str(len(train_positive)) + " Test positive samples: "+str(len(test_positive)))
     load_dgl()
 
 
-# # Read graph of metafeatures
-
-# In[2]:
-
-
+## Read graph of metafeatures
 import networkx as nx 
-map_ds = None
-map_reverse_ds_order = None
+map_nodes = None
+map_reverse = None
 def load_graph():
-    global map_ds
-    global map_reverse_ds_order
+    global map_nodes
+    global map_reverse
+    global train_mask
+    global test_mask
     
-    if word_embedding_encoding == "FASTTEXT":
-        g_x = nx.read_gpickle("./word_embeddings/encoded_fasttext.gpickle")
-    if word_embedding_encoding == "BERT":
-        g_x = nx.read_gpickle("./word_embeddings/encoded_bert.gpickle")
+    g_x = nx.read_gpickle("../step2/output/"+dataset_name+"/nodes_embeddings.gpickle")
 
-    ds_order = 0
+    node_order = 0
     for x,n in sorted(g_x.nodes(data=True)):
-        t = n['tipo']
-        if t == "dataset":
-            n['tipo'] = 0
-        if t == "feature dataset":
-            n['tipo'] = 1
-        if t == "literal dataset":
-            n['tipo'] = 2
-        if t == "attribute":
-            n['tipo'] = 3
-        if t == "feature attribute":
-            n['tipo'] = 4
-        if t == "literal attribute":
-            n['tipo'] = 5  
-        n['ds_order']=ds_order
-        ds_order+=1
+        n['node_order']=node_order
+        node_order+=1
 
-    datasets = [x for (x,y) in g_x.nodes(data=True) if y['tipo']==0]
-    ds_order = [y['ds_order'] for x,y in g_x.nodes(data=True) if y['tipo']==0]
-    map_ds = dict(zip(datasets,ds_order))
-    map_reverse_ds_order = dict(zip(ds_order,datasets))
-    map_ds['DS_1']
+    nodes = [x.strip() for (x,y) in g_x.nodes(data=True)]
+    nodes_order = [y['node_order'] for x,y in g_x.nodes(data=True)]
+    map_nodes = dict(zip(nodes,nodes_order))
+    map_reverse = dict(zip(nodes_order,nodes))
 
     for mask in train_mask:
-        mask[0] = map_ds["DS_"+str(mask[0])]
-        mask[1] = map_ds["DS_"+str(mask[1])]
+        mask[0] = map_nodes[str(mask[0]).strip().replace('\xa0','')]
+        mask[1] = map_nodes[str(mask[1]).strip().replace('\xa0','')]            
         if mask[2] == 0:
             mask[2] = -1
+            
     for mask in test_mask:
-        mask[0] = map_ds["DS_"+str(mask[0])]
-        mask[1] = map_ds["DS_"+str(mask[1])]
+        mask[0] = map_nodes[str(mask[0]).strip().replace('\xa0','')]
+        mask[1] = map_nodes[str(mask[1]).strip().replace('\xa0','')]
+        if mask[2] == 0:
+            mask[2] = -1
+        
+    
+    train_mask = train_mask.astype(np.float) 
+    test_mask = test_mask.astype(np.float) 
+    
+    ##get only same number of negative pairs for test to have 50/50 pos and neg
+    test_pos = [x for x in test_mask if x[2]==1.0]
+    test_neg = [x for x in test_mask if x[2]==-1.0]
+    np.random.shuffle(test_neg)
+    test_mask = np.concatenate((test_pos,test_neg[0:len(test_pos)]))
+    np.random.shuffle(test_mask)
     
     return g_x
 
 
-# ### Export graph to deep graph library
-
-# In[3]:
-
-
+## Export graph to deep graph library
 import dgl
 import dgl.function as fn
 import torch as th
@@ -166,31 +140,24 @@ import torch.nn as nn
 import torch.nn.functional as F
 from dgl import DGLGraph
 #convert from networkx to graph deep library format
-g = None
 def load_dgl():
     global g
     g_x = load_graph()
-    g = dgl.DGLGraph()
-    g.from_networkx(g_x,node_attrs=['tipo','vector','ds_order'], edge_attrs=None)
+    g = dgl.from_networkx(g_x,node_attrs=['vector','node_order'], edge_attrs=None)
+#     g = dgl.DGLGraph()
+#     g.from_networkx(g_x,node_attrs=['tipo','vector','node_order'], edge_attrs=None)
     print("Meta-feature graph from datasets loaded")
 
 
-# # Training
-
-# ### Evaluation methods
-
-# In[16]:
-
-
 # Accuracy based on thresholds of distance (e.g. cosine > 0.8 should be a positive pair)
-def threshold_acc(model, g, features, mask,loss,print_details=False,threshold_dist=0.2,threshold_cos=0.8):
+def threshold_acc(model, g, features, mask,loss,print_details=False,threshold_dist=0.2,threshold_cos=0.5,path=None):
     indices = []
     
     #mask = np.array([x for x in mask if x[2]==1])
     
     z1, z2 = model(g,features,mask[:,0],mask[:,1])
     
-    #dist() | m - dist()
+    #dist() | max(0, m - dist())
     if loss == "ContrastiveLoss" or loss == "Euclidean":
         pdist = th.nn.PairwiseDistance(p=2)        
         result = pdist(z1,z2)
@@ -199,7 +166,7 @@ def threshold_acc(model, g, features, mask,loss,print_details=False,threshold_di
             if r.item() <= threshold_dist:
                 indices.append(1.0)
             else:
-                indices.append(0.0)          
+                indices.append(-1.0)          
         indices_tensor = th.tensor(indices)
         labels_tensor = th.tensor(mask[:,2])
         
@@ -212,34 +179,49 @@ def threshold_acc(model, g, features, mask,loss,print_details=False,threshold_di
             if r.item() >= threshold_cos:
                 indices.append(1.0)
             else:
-                indices.append(0.0)
+                indices.append(-1.0)
         indices_tensor = th.tensor(indices)
         labels_tensor = th.tensor(mask[:,2])
     
-    if print_details:
-        positives = 0.0
-        negatives = 0.0
-        true_positives = 0.0
-        true_negatives = 0.0
-        false_positives = 0.0
-        false_negatives = 0.0
-        
-        for i in range(len(labels_tensor)):
-            prediction = indices_tensor[i].item()
-            label = labels_tensor[i].item()
-            if label == 0.0:
-                negatives+=1
-                if prediction == label:
-                    true_negatives+=1
-                else:
-                    false_positives+=1
+    positives = 0.0
+    negatives = 0.0
+    true_positives = 0.0
+    true_negatives = 0.0
+    false_positives = 0.0
+    false_negatives = 0.0
+    for i in range(len(labels_tensor)):
+        prediction = indices_tensor[i].item()
+        label = labels_tensor[i].item()
+        if label == -1.0:
+            negatives+=1
+            if prediction == label:
+                true_negatives+=1
             else:
-                positives+=1
-                if prediction == label:
-                    true_positives+=1
-                else:
-                    false_negatives+=1
+                false_positives+=1
+        else:
+            positives+=1
+            if prediction == label:
+                true_positives+=1
+            else:
+                false_negatives+=1
         
+    output = {}
+    output['true_positives'] = true_positives
+    output['false_positives'] = false_positives
+    output['true_negatives'] = true_negatives
+    output['false_negatives'] = false_negatives
+    output['recall'] = true_positives/positives
+    output['specificity'] = true_negatives/negatives
+    output['precision'] = 0
+    output['fscore'] = 0
+    try:
+        output['precision'] = true_positives / (true_positives + false_positives)
+        output['fscore'] = 2 * (output['precision'] * output['recall']) / ((output['precision'] + output['recall']))
+    except:
+        print("precision and fscore not calculated")
+    output['acc'] = (true_positives + true_negatives) / len(labels_tensor)
+    
+    if print_details:
         #print confusion matrix            
         print("\t \t \t \t ##########Labels##########")
         print("\t \t \t \t Similar \t Not Similar")
@@ -247,158 +229,146 @@ def threshold_acc(model, g, features, mask,loss,print_details=False,threshold_di
         print("Prediction Not Similar:  \t {} \t \t {}".format(false_negatives,true_negatives))
         print("\t \t \t \t----------------------")
         print("\t \t \t \t{} \t \t {}".format(positives,negatives))
-        print("\nRecall/Sensitivity: "+str(true_positives/positives))
-        print("Specificity/Selectivity: "+str(true_negatives/negatives))
-        print("Accuracy: "+str((true_positives + true_negatives) / len(labels_tensor)))
-        return (true_positives + true_negatives) / len(labels_tensor)
+        print("\nRecall/Sensitivity: "+str(output['recall']))
+        print("Precision: "+str(output['precision']))
+        print("Fscore: "+str(output['fscore']))
+    
+    return output
+
+# def confusion_matrix(model, g, features, mask,loss,threshold):
+def confusion_matrix(training,path=None):
+    model = training.net
+    loss = training.loss_name
+    if strategy == "hold_out":
+        model.eval()
+        test_path = "./ground_truth/"+path_setup+"/test.csv"
+        tmp_test = pd.read_csv(test_path).to_numpy()
+        for mask in tmp_test:
+            mask[0] = map_nodes[str(mask[0]).strip().replace('\xa0','')]
+            mask[1] = map_nodes[str(mask[1]).strip().replace('\xa0','')]
+            if mask[2] == 0:
+                mask[2] = -1
+        tmp_test = tmp_test.astype(np.float) 
+        ##get only same number of negative pairs for test to have 50/50 pos and neg
+        test_pos = [x for x in tmp_test if x[2]==1.0]
+        test_neg = [x for x in tmp_test if x[2]==-1.0]
+        np.random.shuffle(test_neg)
+        tmp_test = np.concatenate((test_pos,test_neg[0:len(test_pos)]))
+        np.random.shuffle(tmp_test)
+        with th.no_grad():
+            acc = threshold_acc(model, g, g.ndata['vector'], tmp_test,loss,print_details=True)
+            return acc
     else:
-        correct = th.sum(indices_tensor == labels_tensor)
-        return correct.item() * 1.0 / len(labels_tensor)
-
-# Accuracy based on nearest neighboor (e.g. the nearest node should be a positive pair)
-def ne_ne_acc_isolation(model, g, features, mask,loss,print_details=False):
-
-    train_indices = np.unique(np.concatenate((train_mask[:,0],train_mask[:,1])))
-    train_pos_samples = np.array([x for x in train_mask if x[2]==1])    
-    train_pos_samples_indices = np.unique(np.concatenate((train_pos_samples[:,0],train_pos_samples[:,1])))
+        if strategy == "10_cv" or strategy == "random_subsam":   
+            model.eval()
+            cv_number = path.split("tmp_cv_result_")[1].split(".")[0]
+            test_path = "./ground_truth/"+path_setup+"/"+cv_number+"/test.csv"
+            tmp_test = pd.read_csv(test_path).to_numpy()
+            for mask in tmp_test:
+                mask[0] = map_nodes[str(mask[0]).strip().replace('\xa0','')]
+                mask[1] = map_nodes[str(mask[1]).strip().replace('\xa0','')]
+                if mask[2] == 0:
+                    mask[2] = -1
+            tmp_test = tmp_test.astype(np.float) 
+            with th.no_grad():
+                acc = threshold_acc(model, g, g.ndata['vector'], tmp_test,loss,print_details=True)
+                return acc    
+        else:
+            raise NameError("Experiment: {} does not exists".format(strategy))
     
-    mask_indices = np.unique(np.concatenate((mask[:,0],mask[:,1])))
-    mask_pos_samples = np.array([x for x in mask if x[2]==1])    
-    mask_pos_samples_indices = np.unique(np.concatenate((mask_pos_samples[:,0],mask_pos_samples[:,1])))
-    mask_pos_samples_indices = np.array([x for x in mask_pos_samples_indices if x not in train_pos_samples_indices ])
-    
-    pos_samples = np.concatenate((train_pos_samples,mask_pos_samples))
-    pos_samples_indices = np.unique(np.concatenate((pos_samples[:,0],pos_samples[:,1])))
-    train_embeddings,mask_pos_samples_embeddings = model(g, features,train_pos_samples_indices,mask_pos_samples_indices)
-    
-    sum_accuracy = 0
-    for i in range(len(mask_pos_samples_indices)):
-        candidate = mask_pos_samples_embeddings[i]
-        #dist() | m - dist()
-        if loss == "ContrastiveLoss":
-            pdist = th.nn.PairwiseDistance(p=2)        
-            result = pdist(candidate,train_embeddings)
-            largest = False
-        #1 - cos() | max(0,cos() - m)
-        if loss == "CosineEmbeddingLoss":
-            thecos = th.nn.CosineSimilarity(dim=1, eps=1e-6)
-            result = thecos(candidate.reshape(1,len(candidate)),train_embeddings)
-            largest = True
-        
-        #we ignore the result of the vector with itself
-#         print("Candidate id: " + str(mask_pos_samples_indices[i]))        
-        result_indices = th.topk(result, 2, largest=largest).indices
-        closest_node_index = th.tensor(train_pos_samples_indices)[result_indices]
-#         print(closest_node_index)
-#         print("all in mask")
-#         print(mask_pos_samples)
-        
-#         check_relation_nodes = np.array([x for x in pos_samples 
-        check_relation_nodes = np.array([x for x in mask_pos_samples 
-                                         if (x[0]==mask_pos_samples_indices[i] and x[1] in closest_node_index) or 
-                                         (x[1]==mask_pos_samples_indices[i] and x[0] in closest_node_index)])
-#         print("relations found: ")
-#         print(check_relation_nodes)
-        if len(check_relation_nodes) > 0:
-            sum_accuracy += 1
-    
-    return sum_accuracy / len(mask_pos_samples_indices)    
-
-# Accuracy based on nearest neighboor (e.g. the nearest node should be a positive pair)
-def ne_ne_acc_random(model, g, features, mask,loss,print_details=False):
-
-    train_indices = np.unique(np.concatenate((train_mask[:,0],train_mask[:,1])))
-    train_pos_samples = np.array([x for x in train_mask if x[2]==1])    
-    train_pos_samples_indices = np.unique(np.concatenate((train_pos_samples[:,0],train_pos_samples[:,1])))
-    
-    mask_indices = np.unique(np.concatenate((mask[:,0],mask[:,1])))
-    mask_pos_samples = np.array([x for x in mask if x[2]==1])    
-    mask_pos_samples_indices = np.unique(np.concatenate((mask_pos_samples[:,0],mask_pos_samples[:,1])))
-#     mask_pos_samples_indices = np.array([x for x in mask_pos_samples_indices if x not in train_pos_samples_indices ])
-    
-    pos_samples = np.concatenate((train_pos_samples,mask_pos_samples))
-    pos_samples_indices = np.unique(np.concatenate((pos_samples[:,0],pos_samples[:,1])))
-    pos_embeddings,mask_pos_samples_embeddings = model(g, features,pos_samples_indices,mask_pos_samples_indices)
-    
-    sum_accuracy = 0
-    for i in range(len(mask_pos_samples_indices)):
-        candidate = mask_pos_samples_embeddings[i]
-        #dist() | m - dist()
-        if loss == "ContrastiveLoss":
-            pdist = th.nn.PairwiseDistance(p=2)        
-            result = pdist(candidate,pos_embeddings)
-            largest = False
-        #1 - cos() | max(0,cos() - m)
-        if loss == "CosineEmbeddingLoss":
-            thecos = th.nn.CosineSimilarity(dim=1, eps=1e-6)
-            result = thecos(candidate.reshape(1,len(candidate)),pos_embeddings)
-            largest = True
-        
-        #we ignore the result of the vector with itself
-#         print("Candidate id: " + str(mask_pos_samples_indices[i]))        
-        result_indices = th.topk(result, 2, largest=largest).indices
-        closest_node_index = th.tensor(pos_samples_indices)[result_indices]
-#         print(closest_node_index)
-#         print("all in mask")
-#         print(mask_pos_samples)
-        
-#         check_relation_nodes = np.array([x for x in pos_samples 
-        check_relation_nodes = np.array([x for x in pos_samples 
-                                         if (x[0]==mask_pos_samples_indices[i] and x[1] in closest_node_index) or 
-                                         (x[1]==mask_pos_samples_indices[i] and x[0] in closest_node_index)])
-#         print("relations found: ")
-#         print(check_relation_nodes)
-        if len(check_relation_nodes) > 0:
-            sum_accuracy += 1
-    
-    return sum_accuracy / len(mask_pos_samples_indices)    
-
-def confusion_matrix(model, g, features, mask,loss,threshold):
-    model.eval()
+def evaluate(training, g, features, mask,loss):
+    training.net.eval()
     with th.no_grad():
-        acc = threshold_acc(model, g, features, mask,loss,print_details=True,threshold_dist=threshold,threshold_cos=threshold)
-        return acc
+        #test accuracy with threshold
+        th_output = threshold_acc(training.net, g, features, mask,loss)
         
-def evaluate(model, g, features, mask,loss):
-    model.eval()
-    with th.no_grad():
-        #naive way of testing accuracy 
-        acc = threshold_acc(model, g, features, mask,loss)
-        #accuracy based on 1-NN 
-        if strategy == "isolation":
-            acc2 = ne_ne_acc_isolation(model, g, features, mask,loss)
-        if strategy == "random":
-            acc2 = ne_ne_acc_random(model, g, features, mask,loss)
-        return acc,acc2
+        #calculate test_loss        
+        z1,z2 = training.net(g, g.ndata['vector'],mask[:,0],mask[:,1])
+        loss_test = training.loss(z1,z2, th.tensor(mask[:,2]))
+
+        return th_output,0,loss_test.item()
+
+def shuffle_splits_ns(train_mask, n,ns=4):
+    train_pos = np.array([x for x in train_mask if x[2]==1])
+    train_neg = np.array([x for x in train_mask if x[2]==-1])
+    nodes_pos = np.unique(np.concatenate((train_pos[:,0],train_pos[:,1])))
+    result = []
+    partial_results_neg = np.array([]).reshape(0,3)
+    partial_results_pos = np.array([]).reshape(0,3)
+    for node in nodes_pos:
+        filter_node_pos = np.array([x for x in train_pos if x[0]==node or x[1]==node])
+        ns_len =int((ns/2) * len(filter_node_pos))
+        filter_node_neg = np.array([x for x in train_neg if x[0]==node or x[1]==node])
+        np.random.shuffle(filter_node_neg)
+        partial_results_neg = np.concatenate((partial_results_neg,filter_node_neg[0:ns_len]))
+    
+    #data aug
+#     for i in range(ns):
+#         partial_results_pos = np.concatenate((partial_results_pos,train_pos))
+    
+    #no data aug
+    partial_results_pos = np.concatenate((partial_results_pos,train_pos))
+    
+    np.random.shuffle(partial_results_pos)
+    np.random.shuffle(partial_results_neg)
+    
+    numb_splits = int(( len(partial_results_pos) + len(partial_results_neg) ) / n) + 1
+    pos_batch = np.array_split(partial_results_pos,numb_splits)
+    neg_batch = np.array_split(partial_results_neg,numb_splits)
+    
+    result = []
+    for j in range(numb_splits):
+        result.append(np.concatenate((pos_batch[j],neg_batch[j])))
+        np.random.shuffle(result[j])
+#     for r in result:
+#         print(len(r))
+    return np.array(result)
 
 
-# ### Train loop
-
-# In[5]:
-
-
-import time
-import numpy as np
-def train(training,iterations):
+def shuffle_splits(train_mask, n):
+    train_pos = [x for x in train_mask if x[2]==1]
+    train_neg = [x for x in train_mask if x[2]==-1]
+    np.random.shuffle(train_pos)
+    np.random.shuffle(train_neg)
+    pos_batch = np.array_split(train_pos,n)
+    neg_batch = np.array_split(train_neg,n)
+    result = []
+    for i in range(n):
+        result.append(np.concatenate((pos_batch[i],neg_batch[i])))
+        np.random.shuffle(result[i])
+    return np.array(result)
+        
+def train(training,iterations,nsample=2):
     dur = []
-    max_acc = 0.0
-    ## create batchs for training
-    numb_splits = int(len(train_mask) / training.batch_splits) + 1
-    train_batch = np.array_split(train_mask,numb_splits)
+    print(str("Start of training...NN {} Loss {} Split {}: ").format(training.net_name,training.loss_name,training.batch_splits))
+    #set max accuracy found if model already has state
+    max_fscore = 0.0
+    if len(training.log) > 0:
+        for l in training.log:
+            if l["fscore"] > max_fscore:
+                max_fscore = l["fscore"]
+            
+    ##original values (take into account for saving the model)
+    o_lr = training.lr
+    o_splits = training.batch_splits
     
     #specify number of threads for the training
     #th.set_num_threads(2)
-    
+
     for epoch in range(iterations):
         #model train mode
         training.net.train()
         t0 = time.time()
         epoch_loss = 0
         
+        ## create batchs and shuffle data for training
+        train_batch = shuffle_splits_ns(train_mask,training.batch_splits,nsample)
+        
         #forward_backward positive batch sample
         for split in train_batch:
             z1,z2 = training.net(g, g.ndata['vector'],split[:,0],split[:,1])
             loss = training.loss(z1,z2, th.tensor(split[:,2]))
+            
             training.optimizer.zero_grad()
             #loss.backward(retain_graph=True)
             loss.backward()
@@ -415,113 +385,76 @@ def train(training,iterations):
         training.runtime_seconds+=t
         
         #accuracy
-        acc,acc2 = evaluate(training.net, g, g.ndata['vector'], test_mask,training.loss_name)
+        th_output,acc2,loss_test = evaluate(training, g, g.ndata['vector'], test_mask,training.loss_name)
         
         #create log
         output = {}
         output['epoch'] = training.epochs_run
-        output['loss'] = float('%.5f'% (epoch_loss))
-        output['acc'] = float('%.5f'% (acc))
-        output['acc2'] = float('%.5f'% (acc2))
+        output['loss'] = epoch_loss
+        output['loss_test'] = loss_test
+        output['acc'] = th_output['acc']
+        output['acc2'] = acc2
+        
+        output['true_positives'] = th_output['true_positives']
+        output['false_positives'] = th_output['false_positives']
+        output['true_negatives'] = th_output['true_negatives']
+        output['false_negatives'] = th_output['false_negatives']
+        output['recall'] = th_output['recall']
+        output['specificity'] = th_output['specificity']
+        output['precision'] = th_output['precision']
+        output['fscore'] = th_output['fscore']
+        
         output['time_epoch'] = float('%.5f'% (np.mean(dur)))
         output['time_total'] = float('%.5f'% (training.runtime_seconds))
+        
+        #updated parameters
+        output['lr'] = training.lr
+        output['batch_splits'] = training.batch_splits
+        
         training.log.append(output)
         training.epochs_run+=1
-        print(str(output))
+        print(str("Ep:{}, loss:{:.5f}, loss_test:{:.5f}, lr:{:.2e}, fs:{:.5f} (r={:.3f},p={:.3f}),  time:{:.3f}, tt:{:.3f}").format(output['epoch'],output['loss'],output['loss_test'],output['lr'],output['fscore'],output['recall'],output['precision'],output['time_epoch'],output['time_total']))
         
         ##save best model and results found so far
-        if acc2 + acc > max_acc:
-            print("Best model found so far...")
-            training.save_state(path_setup+"/best")
-            max_acc = acc2 + acc 
+        if output['fscore'] > max_fscore:
+            print("##########Best model found so far##########")
+            training.set_best(training)
+            max_fscore = output['fscore']
+        training.set_lr(training.lr * .99)       
         
-    #save final model state and final results
-    training.save_state(path_setup)
-
-
-# ### Config and run training
-# ### NN architectures: 
-# {<br>
-#     "0": "Bert_300", <br>
-#     "1": "Bert_300_300_200", <br>
-#     "2": "Bert_768", <br>
-#     "3": "Fasttext3GCN_300" <br>
-#     "4": "Fasttext_150", <br>
-#     "5": "Fasttext_150_150_100", <br>
-#     "6": "Fasttext_300" <br>
-# }
-# ### Loss functions: 
-# {<br>
-#     "0": "ContrastiveLoss", <br>
-#     "1": "CosineEmbeddingLoss", <br>
-# }
-# ### Example to define architecture and loss
-# <b>from step3 import step3_gcn_nn_concatenate as gcn_nn</b> <br>
-# <b>from step3 import step3_gcn_loss as gcn_loss</b> <br>
-# print(gcn_nn.get_options()) #list of options<br>
-# print(gcn_loss.get_options()) #list of options<br>
-# 
-# ### Load training class to save/load/train experiments:
-# <b>from step3 import step3_gcn_train as gcn_train</b>
-
-# In[8]:
-
-
-# from step3 import step3_gcn_nn_concatenate as gcn_nn
-# from step3 import step3_gcn_loss as gcn_loss
-# from step3 import step3_gcn_training as gcn_training
-#load_env(ns=None,st=None,sp=None,we=None)
-
-
-# #load model from path
-# training = gcn_training.Training()
-# training.load_state(path="./models/[file_name].pt")
-# train(training,iterations=N)
-
-# #train new model and specify parameters
-# training = gcn_training.Training()
-# training.set_training(
-#             net_name= gcn_nn.get_option_name(),  #_of_option for NN architecture
-#             batch_splits= ,#_of_sets(this will (give dataset / batch_splits) size of batch
-#             lr= , #learning rate for training (e.g. 1e-3 )
-#             loss_name=gcn_loss.get_option_name() #_of_option for loss ,
-#             loss_parameters=) #loss function parameters separated by '+' e.g. for cosine and contrastive "0.0+mean" 
-# train(training,iterations=N)
-
-
-# ### Test suite
-
-# In[ ]:
-
-
-# training = gcn_training.Training()
-# training.load_state(path="./models/random/2/net_name:Fasttext_300|batch_splits:28.0000|lr:0.0010|loss_name:ContrastiveLoss|loss_parameters:0.7+mean.pt")
-#train(training,iterations=N)
-
-
-# ### Cross validation
-
-# In[ ]:
-
-
-import copy
-import os
-
-cv_logs = []
-def cv_training(training,it):
-    train(training,iterations=it)
-    return training.log
-
-def cross_validation(training,iterations=1):
+                                    
+    #Recover initial setup to save file
+    training.lr = o_lr
+    training.batch_splits = o_splits
+    if training.best != None:
+        training.best.lr = o_lr 
+        training.best.batch_splits = o_splits
+    
+    #save final model state and final results if experiment is not a CV
+    if strategy == "hold_out":
+        if training.best != None:
+            training.best.epochs_run = training.epochs_run
+        training.save_state(path_setup)                        
+        
+def cross_validation(training,iterations=1,ran="1-10",nsample=None):
     global cv_logs
+    
+    if nsample == None:
+        nsample = neg_sample
+    
+    cv_ran = ran.split("-")
+    init = int(cv_ran[0]) -1
+    ending = int(cv_ran[1])
+    if init < 0 or (ending >100 and strategy=="isolation") or (ending >10 and strategy=="random"):
+        raise Exception("Values for CV out of range")
+    
+    
     training_copy = None
-    for i in range(10):
-        load_env(ds_name=dataset_name,ns=neg_sample,st=strategy,sp=create_new_split,we=word_embedding_encoding,cv=i)
+    for i in range(init,ending):
+        load_env(ds_name=dataset_name,ns=0,experiment=strategy,new_split=False,cv=i)
         training_copy = copy.deepcopy(training)
-        cv_logs.append(cv_training(training_copy,iterations))
-    outdir = "./results/"+training_copy.gen_path
-    if not os.path.exists(outdir):
-        Path(outdir).mkdir(parents=True, exist_ok=True)    
-    file_out = open(outdir+"/tmp_cv_result.txt",'w') 
-    file_out.writelines(str(cv_logs))
-
+        train(training_copy,iterations,nsample)
+        path_setup = dataset_name+"/"+strategy+"/"+str(nsample)
+        if training_copy.best != None:
+            training_copy.best.epochs_run = training_copy.epochs_run
+        training_copy.save_state(path_setup,"/tmp_cv_result_"+str(i))

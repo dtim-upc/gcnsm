@@ -1,12 +1,12 @@
 old/*
 word_embeddings/*
 .ipynb_checkpoints/*
+**/.ipynb_checkpoints/*
 openML/*
 draft_test.ipynb
-step3_gcn_logistic.ipynb
-step3_gcnsm.ipynb
-step3_gcn_softmax.ipynb
-step3_plot_results.ipynb
-tests.ipynb
 *.png
+step2/resources/fasttext.bin
+step2/output/*
+models/*
+step1/input/*
 __pycache__
